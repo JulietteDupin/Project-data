@@ -2,113 +2,117 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from statsmodels.tsa.arima.model import ARIMA
+from datetime import datetime
+from statsmodels.tsa.statespace.sarimax import SARIMAX
 
-# 📌 Charger les données
+st.set_page_config(layout="wide")
+
+col1, space1, col2, space2, col3 = st.columns([1.5, 1, 4, 1, 2])
+
+# 📌 Pré-traitement des données médicales
 @st.cache_data
 def load_and_prepare_data():
-    df = pd.read_csv('HDHI Admission Data.csv', encoding='utf-8')
-
-    # 📌 Vérifier les colonnes
-    df.columns = df.columns.str.strip()  # Supprime les espaces autour des noms de colonnes
-    print("Colonnes disponibles:", df.columns)
-
-    # Sélectionner les colonnes nécessaires
-    selected_columns = ["month year", "HB", "TLC", "PLATELETS", "GLUCOSE", "UREA", "CREATININE", "BNP", "EF"]
+    df = pd.read_csv('Admissions Hospitalières Nettoyées 2021-2025.csv', encoding='utf-8', delimiter=',')
+    
+    df.columns = df.columns.str.strip()
+    selected_columns = ["Date d'Entrée", "Durée Hospitalisation (jours)"]
     df = df[selected_columns]
 
-    # 📌 Convertir 'month year' en datetime et utiliser comme index
-    df["month year"] = pd.to_datetime(df["month year"], format="%b-%y", errors='coerce')
+    df["Date d'Entrée"] = pd.to_datetime(df["Date d'Entrée"], errors='coerce')
+    df["Durée Hospitalisation (jours)"] = pd.to_numeric(df["Durée Hospitalisation (jours)"], errors='coerce').fillna(0)
 
-    # Vérifier si certaines dates n'ont pas pu être converties
-    if df["month year"].isna().sum() > 0:
-        print("⚠️ Certaines dates n'ont pas pu être converties. Vérifie le format dans le CSV.")
-        print(df[df["month year"].isna()])
+    nombre_patients_par_mois = []
+    for _, row in df.iterrows():
+        start_date = row["Date d'Entrée"]
+        duration = int(row["Durée Hospitalisation (jours)"])
+        months_range = pd.date_range(start=start_date, periods=duration, freq='D')
 
-    df.set_index("month year", inplace=True)
+        for month in months_range:
+            nombre_patients_par_mois.append({'mois': month, 'patients': 1})
 
-    # 📌 Assurer que toutes les colonnes de maladies sont numériques et gérer les NaN
-    for col in df.columns:
-        # Convertir en numérique (forces les erreurs NaN)
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-        # Gérer les NaN (remplacer par 0, ou choisir une autre méthode comme la moyenne)
-        df[col].fillna(0, inplace=True)
-
-    return df
-
-# 📌 Entraînement du modèle ARIMA et prévision
-@st.cache_data
-def forecast_arima(df_monthly, disease, forecast_steps):
-    predictions = {}
-
-    if disease not in df_monthly.columns:
-        st.error(f"La maladie {disease} n'existe pas dans les données.")
-        return predictions
-
-    print(f"🔎 Entraînement du modèle ARIMA pour {disease}...")
-
-    if df_monthly[disease].nunique() < 5:
-        print(f"⚠️ Trop peu de données pour {disease}, skipping...")
-        return predictions
-
-    # 📌 Vérifier si les données sont bien numériques
-    print(f"Type de données pour {disease}: {df_monthly[disease].dtype}")
+    df_patients = pd.DataFrame(nombre_patients_par_mois)
+    df_monthly = df_patients.groupby('mois').sum()
+    df_monthly_agg = df_monthly.resample('ME').sum()  # Agrégation mensuelle
     
+    today = datetime.now().date()
+    df_monthly_agg = df_monthly_agg[df_monthly_agg.index.date <= today]  # Garde toutes les données historiques jusqu'à aujourd'hui
+
+
+    return df_monthly_agg
+
+# 📌 Prévision SARIMA
+@st.cache_data
+def forecast_sarima(df, forecast_steps):
     try:
-        # Entraînement du modèle ARIMA
-        model = ARIMA(df_monthly[disease], order=(2, 1, 2))  # (p, d, q) ajustables
+        model = SARIMAX(df, order=(0, 1, 1), seasonal_order=(1, 1, 1, 12))
         model_fit = model.fit()
+        forecast = model_fit.get_forecast(steps=forecast_steps).predicted_mean
+        forecast_index = pd.date_range(start=df.index[-1], periods=forecast_steps + 1, freq='ME')[1:]
 
-        # Prédire les prochains mois
-        forecast = model_fit.forecast(steps=forecast_steps)
-        predictions[disease] = forecast  # Stocke les prévisions pour la maladie
-
-        # 📊 Affichage des prévisions
-        fig, ax = plt.subplots(figsize=(10, 4))  # Créer une figure et un axe
-        ax.plot(df_monthly[disease], label="Données réelles")
-        ax.axvline(df_monthly.index[-1], color='r', linestyle='--', label="Début de la prévision")
-
-        # Corrigé: Utilisation des parenthèses pour la compréhension de générateur
-        ax.scatter([df_monthly.index[-1] + pd.DateOffset(months=i) for i in range(1, forecast_steps + 1)],
-                   [forecast[i-1] for i in range(1, forecast_steps + 1)],
-                   color='red', label="Prévisions")
-        
-        ax.set_title(f"Prévision ARIMA pour {disease}")
-        ax.legend()
-        st.pyplot(fig)  # Passer la figure à st.pyplot()
-
+        return forecast, forecast_index
     except Exception as e:
-        print(f"❌ Erreur pour {disease} : {e}")
-        return predictions
+        st.error(f"Erreur lors de la prévision : {e}")
+        return None, None
 
-    return predictions
-
-# Main Streamlit interface
+# Interface principale
 def main():
-    st.title("Prévisions des maladies des patients")
+    with col2:
+        st.title("Prévisions des Admissions Hospitalières")
+        
+        df_monthly_agg = load_and_prepare_data()
 
-    # Charger et préparer les données
-    df_monthly = load_and_prepare_data()
+        st.subheader("Visualisation des Données Nettoyées")
+        st.line_chart(df_monthly_agg)
 
-    # Agréger les données par mois (utiliser "ME" au lieu de "M")
-    df_monthly = df_monthly.resample("ME").sum()
+        forecast_steps = st.slider("Nombre de mois à prédire", min_value=1, max_value=24, value=12)
+        forecast, forecast_index = forecast_sarima(df_monthly_agg, forecast_steps)
 
-    # Sélectionner la maladie
-    disease_options = df_monthly.columns.tolist()
-    disease = st.selectbox("Sélectionne la maladie", disease_options)
+        if forecast is not None:
+            fig, ax = plt.subplots(figsize=(12, 6))
+            ax.plot(df_monthly_agg, label="Données Réelles", marker='o')
+            ax.plot(forecast_index, forecast, label="Prévisions SARIMA", color='red', linestyle='dashed', marker='x')
+            ax.set_title("Prévisions SARIMA avec saisonnalité annuelle")
+            ax.set_xlabel("Mois")
+            ax.set_ylabel("Nombre de patients")
+            ax.legend()
+            ax.grid(True)
+            plt.xticks(rotation=45)
+            st.pyplot(fig)
 
-    # Sélectionner le nombre de mois à prédire
-    forecast_steps = st.slider("Sélectionne le nombre de mois à prédire", min_value=1, max_value=12, value=1)
+    with col1:
+        st.subheader("Taux d'Occupation des Lits")
+        lits_disponibles = st.number_input("Nombre de lits disponibles", min_value=1, value=100)
+        crise = False
 
-    # Prévoir avec ARIMA
-    predictions = forecast_arima(df_monthly, disease, forecast_steps)
+        if forecast is not None:
+            for i, pred in enumerate(forecast):
+                taux_occupation = (pred / lits_disponibles) * 100
+                if taux_occupation >= 90:
+                    st.warning(f"🚨 Alerte : Plus de 90% des lits seront occupés au mois {i + 1}")
+                    crise = True
+                    break
 
-    # Afficher les prévisions
-    if predictions:
-        st.subheader(f"Prévisions pour {disease}")
-        for i, prediction in enumerate(predictions[disease]):
-            prediction_date = df_monthly.index[-1] + pd.DateOffset(months=i+1)
-            st.write(f"📅 {prediction_date.strftime('%b %Y')} : {prediction:.2f} patients")
+            if not crise:
+                st.success("✅ Prévision stable pour les 24 prochains mois")
+
+    with col3:
+        st.subheader("Consommation Matériel Médical")
+
+        infirmiers = st.number_input("Nombre d'infirmiers par patient", min_value=1, value=2)
+        gants = st.number_input("Gants par infirmier", min_value=1, value=2)
+        compresses = st.number_input("Compresses par patient", min_value=1, value=2)
+        seringues = st.number_input("Seringues par patient", min_value=1, value=2)
+
+        if forecast is not None:
+            total_infirmiers = int(infirmiers * forecast.sum())  # ✅ Correction ici !
+            total_gants = total_infirmiers * gants
+            total_compresses = int(forecast.sum() * compresses)
+            total_seringues = int(forecast.sum() * seringues)
+
+            st.markdown(f"**Infirmiers nécessaires :** {total_infirmiers}")
+            st.markdown(f"**Gants nécessaires :** {total_gants}")
+            st.markdown(f"**Compresses nécessaires :** {total_compresses}")
+            st.markdown(f"**Seringues nécessaires :** {total_seringues}")
 
 if __name__ == "__main__":
     main()
