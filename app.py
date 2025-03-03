@@ -61,16 +61,13 @@ def main():
         
         df_monthly_agg = load_and_prepare_data()
 
-        st.subheader("Visualisation des Données Nettoyées")
-        st.line_chart(df_monthly_agg)
-
         forecast_steps = st.slider("Nombre de mois à prédire", min_value=1, max_value=24, value=12)
         forecast, forecast_index = forecast_sarima(df_monthly_agg, forecast_steps)
 
         if forecast is not None:
             fig, ax = plt.subplots(figsize=(12, 6))
             ax.plot(df_monthly_agg, label="Données Réelles", marker='o')
-            ax.plot(forecast_index, forecast, label="Prévisions SARIMA", color='red', linestyle='dashed', marker='x')
+            ax.plot(forecast_index, forecast, label="Prévisions SARIMA", color='red', linestyle='dashed', marker='o')
             ax.set_title("Prévisions SARIMA avec saisonnalité annuelle")
             ax.set_xlabel("Mois")
             ax.set_ylabel("Nombre de patients")
