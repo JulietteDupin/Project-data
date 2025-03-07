@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
 from statsmodels.tsa.statespace.sarimax import SARIMAX
+import os
 
 st.set_page_config(layout="wide")
 
@@ -37,7 +38,6 @@ def load_and_prepare_data():
     today = datetime.now().date()
     df_monthly_agg = df_monthly_agg[df_monthly_agg.index.date <= today]  # Garde toutes les données historiques jusqu'à aujourd'hui
 
-
     return df_monthly_agg
 
 # 📌 Prévision SARIMA
@@ -54,8 +54,45 @@ def forecast_sarima(df, forecast_steps):
         st.error(f"Erreur lors de la prévision : {e}")
         return None, None
 
+# 📌 Lecture et sauvegarde des données dans un fichier CSV
+def load_user_data():
+    # Nom du fichier CSV
+    file_path = "user_data.csv"
+    
+    if os.path.exists(file_path):
+        user_data = pd.read_csv(file_path)
+        if user_data.empty:
+            # Si le fichier est vide, crée un DataFrame avec des valeurs par défaut
+            user_data = pd.DataFrame(columns=["lits_disponibles", "infirmiers", "gants", "compresses", "seringues"])
+    else:
+        # Si le fichier n'existe pas, crée un DataFrame avec des valeurs par défaut
+        user_data = pd.DataFrame(columns=["lits_disponibles", "infirmiers", "gants", "compresses", "seringues"])
+
+    return user_data
+
+def save_user_data(user_data):
+    # Sauvegarde les données utilisateur dans un fichier CSV
+    file_path = "user_data.csv"
+    user_data.to_csv(file_path, index=False)
+
+# Fonction pour sécuriser la conversion d'une valeur (NaN -> valeur par défaut)
+def safe_convert(value, default_value):
+    return int(value) if pd.notna(value) else default_value
+
 # Interface principale
 def main():
+    user_data = load_user_data()
+
+    # Si le DataFrame est vide, initialise avec des valeurs par défaut
+    if user_data.empty:
+        user_data = pd.DataFrame({
+            "lits_disponibles": [100],
+            "infirmiers": [2],
+            "gants": [2],
+            "compresses": [2],
+            "seringues": [2]
+        })
+
     with col2:
         st.title("Prévisions des Admissions Hospitalières")
         
@@ -78,7 +115,9 @@ def main():
 
     with col1:
         st.subheader("Taux d'Occupation des Lits")
-        lits_disponibles = st.number_input("Nombre de lits disponibles", min_value=1, value=100)
+        lits_disponibles = st.number_input("Nombre de lits disponibles", min_value=1, value=safe_convert(user_data["lits_disponibles"].iloc[0], 100))
+        user_data.at[0, "lits_disponibles"] = lits_disponibles  # Enregistrement de l'entrée
+
         crise = False
 
         if forecast is not None:
@@ -95,10 +134,16 @@ def main():
     with col3:
         st.subheader("Consommation Matériel Médical")
 
-        infirmiers = st.number_input("Nombre d'infirmiers par patient", min_value=1, value=2)
-        gants = st.number_input("Gants par infirmier", min_value=1, value=2)
-        compresses = st.number_input("Compresses par patient", min_value=1, value=2)
-        seringues = st.number_input("Seringues par patient", min_value=1, value=2)
+        infirmiers = st.number_input("Nombre d'infirmiers par patient", min_value=1, value=safe_convert(user_data["infirmiers"].iloc[0], 2))
+        gants = st.number_input("Gants par infirmier", min_value=1, value=safe_convert(user_data["gants"].iloc[0], 2))
+        compresses = st.number_input("Compresses par patient", min_value=1, value=safe_convert(user_data["compresses"].iloc[0], 2))
+        seringues = st.number_input("Seringues par patient", min_value=1, value=safe_convert(user_data["seringues"].iloc[0], 2))
+
+        # Enregistrement des entrées de consommation
+        user_data.at[0, "infirmiers"] = infirmiers
+        user_data.at[0, "gants"] = gants
+        user_data.at[0, "compresses"] = compresses
+        user_data.at[0, "seringues"] = seringues
 
         if forecast is not None:
             total_infirmiers = int(infirmiers * forecast.sum())  # ✅ Correction ici !
@@ -110,6 +155,9 @@ def main():
             st.markdown(f"**Gants nécessaires :** {total_gants}")
             st.markdown(f"**Compresses nécessaires :** {total_compresses}")
             st.markdown(f"**Seringues nécessaires :** {total_seringues}")
+
+    # Sauvegarde les données utilisateur à chaque fin d'itération
+    save_user_data(user_data)
 
 if __name__ == "__main__":
     main()
